@@ -44,6 +44,9 @@ typedef enum{
 #define STICK_Y_PIN GPIO_PIN_1
 #define STICK_X_PIN GPIO_PIN_0
 
+#define USE_UART1
+//#define USE_CDC
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,16 +57,23 @@ typedef enum{
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+#ifdef USE_UART1
 uint8_t uart_rx_data;
 bool uart_rx_flag = false;
+#endif
 
+#ifdef USE_CDC
 uint8_t *cdc_rx_data;
 bool cdc_rx_flag = false;
+#endif
 
 uint32_t ADC_VAL[3];
-
+uint8_t buffer[8] = {0};
 uint8_t tx_buffer[32];
-extern uint8_t CDC_Transmit_FS(uint8_t* Buf, uint16_t Len);
+
+
+extern uint8_t USBD_HID_SendReport(USBD_HandleTypeDef *pdev, uint8_t *report, uint16_t len);
+extern USBD_HandleTypeDef hUsbDeviceFS;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -82,40 +92,50 @@ void TX(TX_Type tx_type, char *fmt,...){
 	va_list arg;
 	va_start(arg,fmt);
 	vsnprintf((char *)&tx_buffer[0],32,fmt,arg);
-
+#ifdef USE_UART1
 	if(tx_type==UART1){
 		HAL_UART_Transmit(&huart1,tx_buffer,32,10);
 	}
+#endif
+
+#ifdef USE_CDC
 	else if(tx_type==CDC){
 		CDC_Transmit_FS(tx_buffer,32);
 	}
+#endif
 	va_end(arg);
 	memset(tx_buffer,0,32);
 }
 
 void read_joystick_dma(){
-	TX(UART1,"X_VAL:%d\n",ADC_VAL[0]);
-	TX(UART1,"Y_VAL:%d\n",ADC_VAL[1]);
-	TX(UART1,"SW_VAL:%d\n",ADC_VAL[2]);
 	//x
 	if(ADC_VAL[0]>=3000){
-		TX(CDC,"<-\n");
+		TX(UART1,"<-\n");
+		buffer[2] = 0x50;
 	}
 	else if(ADC_VAL[0]<=500){
-		TX(CDC,"->\n");
+		TX(UART1,"->\n");
+		buffer[2] = 0x4F;
 	}
 
 	//y
 	if(ADC_VAL[1]>=3000){
-		TX(CDC,"^\n");
+		TX(UART1,"^\n");
+		buffer[2] = 0x52;
 	}
 	else if(ADC_VAL[1]<=500){
-		TX(CDC,"v\n");
+		TX(UART1,"v\n");
+		buffer[2] = 0x51;
 	}
 
-	else if(ADC_VAL[2]<=500){
-		TX(CDC,"Switch click!\n");
+	if(ADC_VAL[2]<=500){
+		TX(UART1,"Switch click!\n");
+		buffer[0] = 0x02;
+		buffer[2] = 0x04;
 	}
+	USBD_HID_SendReport(&hUsbDeviceFS, buffer, 8);
+	memset(buffer,0,8);
+	USBD_HID_SendReport(&hUsbDeviceFS, buffer, 8);
 }
 /* USER CODE END PFP */
 
@@ -159,7 +179,6 @@ int main(void)
   MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   uint32_t pretime=HAL_GetTick();
-
 
   UART_Start_Receive_DMA(&huart1, &uart_rx_data, 1);
   HAL_ADC_Start_DMA(&hadc1,&ADC_VAL[0], 3);
